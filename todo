@@ -1,0 +1,23 @@
+=TODO list/recap=
+
+===07/12===
+
+* downloaded and installed VSCode and Go. 
+* got YouTube API Key and OAuth
+* fooled around with the YouTube Go example code
+  - included looking through the source code to understand what was happening/how they were reaching the REST endpoint
+  - ultimately remained confused until looking at the API documentation (in general, for all languages) online
+  - then I realized the scope of the API and that the package created for Go contains helper methods to execute these API calls
+  - => thus, no need to manually determine URLs for the API. Go methods do it for you!
+* modified the example code to start accessing different types of channel data y using the channel Id rather than username
+* figured out how to turn channel info into JSON and print that JSON to the console
+* NOTE: not all channels have easily determined IDs. Should create a helper API call to get channel ID based on username
+* channel info does not include a list of related channels - will need to write custom scraper to get that info!!
+
+Next steps:
+* build UI to visualize channel relationships
+* build scraper to get related channels
+* create helper methods for common sets of API calls
+* access my own account data and figure out what can be accessed
+
+
