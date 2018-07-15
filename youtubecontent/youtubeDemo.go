@@ -1,20 +1,26 @@
 package youtubecontent
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"media-tracker/databaseDriver"
 	"net/http"
 	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/youtube/v3"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 const missingClientSecretsMessage = `
@@ -182,6 +188,84 @@ func getPlaylistVideosIdsMultiplePlaylistItemListResponse(responses []*youtube.P
 	return videoIDSlice
 }
 
+func getVideoListByIDsResult(service *youtube.Service, params string, ids []string) *youtube.VideoListResponse {
+	call := service.Videos.List(params)
+	call = call.Id(strings.Join(ids, ","))
+	response, err := call.Do()
+	if err != nil {
+		fmt.Println("Error getting video info")
+		os.Exit(1)
+	}
+
+	return response
+}
+
+func parseVideoListResultsToVideoSlice(results *youtube.VideoListResponse) []*youtube.Video {
+	return results.Items
+}
+
+func createVideoDataMap(video *youtube.Video) map[string]interface{} {
+	return nil
+}
+
+func addVideosToDatabaseTable(db *sql.DB, databaseName, tableName string, videos interface{}) ([]bool, error) {
+	ret := []bool{}
+	videosDataMaps := []map[string]interface{}{}
+
+	switch videos.(type) {
+	case []*youtube.Video:
+		for _, vid := range videos.([]*youtube.Video) {
+			videosDataMaps = append(videosDataMaps, createVideoDataMap(vid))
+		}
+	case *youtube.Video:
+		videosDataMaps = append(videosDataMaps, createVideoDataMap(videos.(*youtube.Video)))
+	default:
+		return nil, errors.New("Trying to add non youtube.Video data in method designed to handle youtube.Video objects")
+
+	}
+
+	// Add to database
+	for _, dataMap := range videosDataMaps {
+		// Make sure the channel for the video is stored so that the video can be used to quickly point to its channel data
+		//
+		channelTableId := addChannelToDatabaseTable(db, databaseName, "channels", dataMap["channelId"].(string))
+
+		// Update the video dataMap with its channel's ID in the channelTable
+		dataMap["channelTableId"] = channelTableId
+
+		// Add the video data to the table in the database
+		databaseDriver.AddDataToTable(db, databaseName, tableName, dataMap)
+
+	}
+
+	return ret, nil
+}
+
+func addChannelToDatabaseTable(db *sql.DB, databaseName, tableName string, channelID string) int {
+
+	return -1
+}
+
+// Returns slice of channelTableID in same order as the data was given
+func addChannelsToDatabaseTable(db *sql.DB, databaseName, tableName string, channelIds interface{}) []int {
+
+	returnTableIDs := []int{}
+	switch channelIds.(type) {
+	// If slice of channel IDs is given
+	case []string:
+		for _, singleID := range channelIds.([]string) {
+			returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(db, databaseName, tableName, singleID))
+		}
+		// If single channel ID given
+	case string:
+		returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(db, databaseName, tableName, channelIds.(string)))
+		// If other type given
+	default:
+		return []int{-1}
+	}
+	return returnTableIDs
+}
+
 func channelsListById(service *youtube.Service, part string, id string) {
 	call := service.Channels.List(part)
 	call = call.Id(id)
@@ -210,7 +294,7 @@ func printJSON(obj interface{}) {
 	fmt.Printf("%s\n", retJSONObj)
 }
 
-func DemoMain() {
+func Initialize(db *sql.DB) {
 	fmt.Println("in")
 	ctx := context.Background()
 
@@ -251,14 +335,14 @@ func DemoMain() {
 	// Get my liked videos
 	// COMPLETE: Get the videos on my liked playlist - only need 'contentDetails'
 	// COMPLETE: parse the JSON response to get each video's videoID
-	// Step 3: for each videoID look up that videoInfo
-	// Step 4: check if video in database
+	// COMPLETE: for each videoID look up that videoInfo
+	// Step 4: check if video in database   TODO
 	// 	- if not, start process to add video to database:
-	// 		* check if video channel in db
-	//			# if not, add channel to db
-	//		* add video to db
-	//		* link video to channel ( so that video can point to channelTableID)
-	// Step 5: add entry to likedPlaylist DB and link to video in video DB
+	// 		* check if video channel in db TODO
+	//			# if not, add channel to db TODO
+	//		* add video to db PARTIALLY DONE
+	//		* link video to channel ( so that video can point to channelTableID) COMPLETED
+	// Step 5: add entry to likedPlaylist DB and link to video in video DB TODO
 
 	// This process can be used for most playlists
 	// To generalize this process further,

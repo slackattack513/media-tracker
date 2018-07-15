@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"media-tracker/databaseDriver"
+	"media-tracker/youtubecontent"
 	"os"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -27,6 +28,7 @@ func main() {
 	// Ready to communicate with DB
 	ret := databaseDriver.MakeYoutubePlaylistTable(db, "youtubedata", "relatedVideos")
 	fmt.Printf("Made table: %t\n", ret)
-	// youtubecontent.DemoMain()
+
+	youtubecontent.Initialize(db)
 
 }

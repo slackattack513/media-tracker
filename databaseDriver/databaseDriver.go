@@ -78,6 +78,24 @@ func tableExists(db *sql.DB, databasename string, tableName string) bool {
 // 	}
 // }
 
+func AddDataToTable(db *sql.DB, databaseName, tableName string, newData map[string]interface{}) {
+	changeDatabase(db, databaseName)
+	preparedInsert, err := db.Prepare("INSERT INTO " + tableName + " (?) VALUES ( ? )") // ? = placeholder
+	if err != nil {
+		fmt.Println("Error creating 'prepare' statement")
+		os.Exit(1)
+	}
+	defer preparedInsert.Close() // Close the statement when we leave main() / the program terminates
+
+	//insertData
+	for key, val := range newData {
+		_, err = preparedInsert.Exec(key, val)
+		if err != nil {
+			fmt.Println("Error on insertion")
+		}
+	}
+}
+
 func MakeYoutubePlaylistTable(db *sql.DB, databaseName, tableName string) bool {
 
 	changeDatabase(db, databaseName)
