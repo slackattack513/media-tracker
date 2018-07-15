@@ -115,6 +115,73 @@ func channelsListByUsername(service *youtube.Service, part string, forUsername s
 		response.Items[0].Statistics.ViewCount))
 }
 
+func callListPlaylistObjectAccessAllPages(service *youtube.Service, params string, playlistID string, maxResults int64) []*youtube.PlaylistItemListResponse {
+	ret := []*youtube.PlaylistItemListResponse{}
+	var nextPageToken string
+	// videoIDSlices := []string{}
+	for {
+		response := callListPlaylistObject(service, params, playlistID, maxResults, nextPageToken)
+
+		// printJSON(response)
+		ret = append(ret, response)
+		// videoIDSlices = append(videoIDSlices, getPlaylistVideosIdsSinglePlaylistItemListResponse(response)...)
+		if response.NextPageToken != "" {
+			nextPageToken = response.NextPageToken
+			// fmt.Printf("%s\n", nextPageToken)
+		} else {
+			break
+		}
+
+	}
+
+	return ret
+}
+
+func callListPlaylistObject(service *youtube.Service, params string, playlistID string, maxResults int64, pageToken string) *youtube.PlaylistItemListResponse {
+	var maxResultsDefault int64 = 10
+	if maxResults == 0 {
+		maxResults = maxResultsDefault
+	} else if maxResults > 50 {
+		maxResults = 50
+	}
+
+	call := service.PlaylistItems.List(params)
+	// call = call.ForUsername(forUsername)
+	call = call.PlaylistId(playlistID)
+	call = call.MaxResults(maxResults)
+
+	if pageToken != "" {
+		call.PageToken(pageToken)
+	}
+	response, err := call.Do()
+	handleError(err, "")
+	return response
+}
+
+func getPlaylistVideosIdsSinglePlaylistItemListResponse(response *youtube.PlaylistItemListResponse) []string {
+	videoIDSlice := []string{}
+
+	playlistItems := response.Items
+
+	for _, item := range playlistItems {
+		videoIDSlice = append(videoIDSlice, item.ContentDetails.VideoId)
+	}
+
+	return videoIDSlice
+}
+
+func getPlaylistVideosIdsMultiplePlaylistItemListResponse(responses []*youtube.PlaylistItemListResponse) []string {
+	videoIDSlice := []string{}
+	for _, response := range responses {
+		playlistItems := response.Items
+
+		for _, item := range playlistItems {
+			videoIDSlice = append(videoIDSlice, item.ContentDetails.VideoId)
+		}
+	}
+	return videoIDSlice
+}
+
 func channelsListById(service *youtube.Service, part string, id string) {
 	call := service.Channels.List(part)
 	call = call.Id(id)
@@ -136,6 +203,11 @@ func channelsListById(service *youtube.Service, part string, id string) {
 	// 	response.Items[0].Id,
 	// 	response.Items[0].Snippet.Title,
 	// 	response.Items[0].Statistics.ViewCount))
+}
+
+func printJSON(obj interface{}) {
+	retJSONObj, _ := json.MarshalIndent(obj, "", "    ")
+	fmt.Printf("%s\n", retJSONObj)
 }
 
 func DemoMain() {
@@ -161,6 +233,35 @@ func DemoMain() {
 	// channelsListByUsername(service, "snippet,contentDetails,contentOwnerDetails,statistics", "GoogleDevelopers")
 	// ifscID := "UC2MGuhIaOP6YLpUx106kTQw"
 	// mrWolfId := "UCs0XZm6REAhwVwmyBPRAKMQ"
-	conanID := "UCi7GJNg51C3jgmYTUwqoUXA"
-	channelsListById(service, "brandingSettings,snippet,contentDetails,contentOwnerDetails,statistics", conanID)
+	// conanID := "UCi7GJNg51C3jgmYTUwqoUXA"
+	// slackID := "UCyHI7IpiV3ogpKzzm0xxqnA"
+	// channelsListById(service, "brandingSettings,snippet,contentDetails,contentOwnerDetails,statistics", slackID)
+	// slackFavoritesPlaylist := "FLyHI7IpiV3ogpKzzm0xxqnA"
+	slackLikesPlaylist := "LLyHI7IpiV3ogpKzzm0xxqnA"
+	// listVideosFromPlaylist(service, "snippet,contentDetails,id,status", slackLikesPlaylist)
+
+	// likedVideosPlaylistItemListResponseObject := callListPlaylistObject(service, "contentDetails", slackLikesPlaylist, 50, "")
+	// vids := getPlaylistVideosIdsSinglePlaylistItemListResponse(likedVideosPlaylistItemListResponseObject)
+	// printJSON(vids)
+
+	allLikedVidsPlaylist := callListPlaylistObjectAccessAllPages(service, "contentDetails", slackLikesPlaylist, 50)
+	vids := getPlaylistVideosIdsMultiplePlaylistItemListResponse(allLikedVidsPlaylist)
+	printJSON(vids)
+
+	// Get my liked videos
+	// COMPLETE: Get the videos on my liked playlist - only need 'contentDetails'
+	// COMPLETE: parse the JSON response to get each video's videoID
+	// Step 3: for each videoID look up that videoInfo
+	// Step 4: check if video in database
+	// 	- if not, start process to add video to database:
+	// 		* check if video channel in db
+	//			# if not, add channel to db
+	//		* add video to db
+	//		* link video to channel ( so that video can point to channelTableID)
+	// Step 5: add entry to likedPlaylist DB and link to video in video DB
+
+	// This process can be used for most playlists
+	// To generalize this process further,
+	//	* COMPLETE: write code to create a DB for a new playlist - Should not take much more space since video info is only saved once in that single DB
+
 }

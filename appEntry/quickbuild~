@@ -1,0 +1,6 @@
+#! /bin/bash
+cd ../youtube
+go install
+cd ../appEntry/
+go build
+./appEntry
