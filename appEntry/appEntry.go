@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"media-tracker/databaseDriver"
-	"media-tracker/youtubecontent"
 	"os"
+	"reflect"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -12,6 +12,18 @@ import (
 const db_driver string = "mysql"
 const db_username string = "root"
 const db_password string = "Onyixj@bs$"
+
+func dummy(i interface{}) {
+	fmt.Println(reflect.TypeOf(i))
+}
+
+func dummy2() interface{} {
+	return "hi"
+}
+
+func dummy3() interface{} {
+	return true
+}
 
 func main() {
 	fmt.Println("starting")
@@ -25,10 +37,27 @@ func main() {
 		defer db.Close()
 	}
 
-	// Ready to communicate with DB
-	ret := databaseDriver.MakeYoutubePlaylistTable(db, "youtubedata", "relatedVideos")
-	fmt.Printf("Made table: %t\n", ret)
+	dummy(dummy2())
+	dummy(dummy3())
 
-	youtubecontent.Initialize(db)
+	// columnNames := []string{"channelID", "channelName", "tableId"}
+	// var dataValues = make(map[string]string)
+
+	// dataValues["channelName"] = "testChannelName"
+
+	// returnedData := databaseDriver.GetDataFromTable(db, "youtubedata", "channelData", columnNames, dataValues)
+	//
+	// fmt.Println(returnedData)
+	// fmt.Print("\n\n\n\n\n")
+
+	// var num int64
+	// num, _ = strconv.ParseInt(string(returnedData[0]["tableId"].([]uint8)), 10, 0)
+	// fmt.Println(num)
+
+	// Ready to communicate with DB
+	// ret := databaseDriver.MakeYoutubePlaylistTable(db, "youtubedata", "relatedVideos")
+	// fmt.Printf("Made table: %t\n", ret)
+
+	// youtubecontent.Initialize(db)
 
 }

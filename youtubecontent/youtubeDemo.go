@@ -1,111 +1,23 @@
 package youtubecontent
 
 import (
+	"customHelperPackages/prettyPrinting"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"media-tracker/databaseDriver"
-	"net/http"
-	"net/url"
 	"os"
-	"os/user"
-	"path/filepath"
+	"strconv"
 	"strings"
 
-	"golang.org/x/net/context"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/youtube/v3"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
-const missingClientSecretsMessage = `
-Please configure OAuth 2.0
-`
-
-// getClient uses a Context and Config to retrieve a Token
-// then generate a Client. It returns the generated Client.
-func getClient(ctx context.Context, config *oauth2.Config) *http.Client {
-	cacheFile, err := tokenCacheFile()
-	if err != nil {
-		log.Fatalf("Unable to get path to cached credential file. %v", err)
-	}
-	tok, err := tokenFromFile(cacheFile)
-	if err != nil {
-		tok = getTokenFromWeb(config)
-		saveToken(cacheFile, tok)
-	}
-	return config.Client(ctx, tok)
-}
-
-// getTokenFromWeb uses Config to request a Token.
-// It returns the retrieved Token.
-func getTokenFromWeb(config *oauth2.Config) *oauth2.Token {
-	authURL := config.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	fmt.Printf("Go to the following link in your browser then type the "+
-		"authorization code: \n%v\n", authURL)
-
-	var code string
-	if _, err := fmt.Scan(&code); err != nil {
-		log.Fatalf("Unable to read authorization code %v", err)
-	}
-
-	tok, err := config.Exchange(oauth2.NoContext, code)
-	if err != nil {
-		log.Fatalf("Unable to retrieve token from web %v", err)
-	}
-	return tok
-}
-
-// tokenCacheFile generates credential file path/filename.
-// It returns the generated credential path/filename.
-func tokenCacheFile() (string, error) {
-	usr, err := user.Current()
-	if err != nil {
-		return "", err
-	}
-	tokenCacheDir := filepath.Join(usr.HomeDir, ".credentials")
-	os.MkdirAll(tokenCacheDir, 0700)
-	return filepath.Join(tokenCacheDir,
-		url.QueryEscape("youtube-go-quickstart.json")), err
-}
-
-// tokenFromFile retrieves a Token from a given file path.
-// It returns the retrieved Token and any read error encountered.
-func tokenFromFile(file string) (*oauth2.Token, error) {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	t := &oauth2.Token{}
-	err = json.NewDecoder(f).Decode(t)
-	defer f.Close()
-	return t, err
-}
-
-// saveToken uses a file path to create a file and store the
-// token in it.
-func saveToken(file string, token *oauth2.Token) {
-	fmt.Printf("Saving credential file to: %s\n", file)
-	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		log.Fatalf("Unable to cache oauth token: %v", err)
-	}
-	defer f.Close()
-	json.NewEncoder(f).Encode(token)
-}
-
-func handleError(err error, message string) {
-	if message == "" {
-		message = "Error making API call"
-	}
-	if err != nil {
-		log.Fatalf(message+": %v", err.Error())
-	}
+type connections struct {
+	db      *sql.DB
+	service *youtube.Service
 }
 
 func channelsListByUsername(service *youtube.Service, part string, forUsername string) {
@@ -204,12 +116,45 @@ func parseVideoListResultsToVideoSlice(results *youtube.VideoListResponse) []*yo
 	return results.Items
 }
 
-func createVideoDataMap(video *youtube.Video) map[string]interface{} {
-	return nil
+func addObjectsToDatabaseTable(conn connections, databaseName, tableName string, objects, objectType interface{}) []int64 {
+	// db := conn.db
+	returnTableIDs := []int64{}
+	switch objects.(type) {
+	// If slice of channel IDs is given
+	case []string:
+		for _, singleID := range objects.([]string) {
+			returnTableIDs = append(returnTableIDs, addObjectToDatabaseTable(conn, databaseName, tableName, singleID, objectType))
+		}
+		// If single channel ID given
+	case string:
+		returnTableIDs = append(returnTableIDs, addObjectToDatabaseTable(conn, databaseName, tableName, objects.(string), objectType))
+		// If other type given
+	default:
+		return []int64{-1}
+	}
+	return returnTableIDs
 }
+func addVideosToDatabaseTable(conn connections, databaseName, tableName string, videos interface{}) []int64 {
 
-func addVideosToDatabaseTable(db *sql.DB, databaseName, tableName string, videos interface{}) ([]bool, error) {
-	ret := []bool{}
+	returnTableIDs := []int64{}
+	switch videos.(type) {
+	// If slice of channel IDs is given
+	case []string:
+		for _, singleID := range videos.([]string) {
+			returnTableIDs = append(returnTableIDs, addVideoToDatabaseTable(conn, databaseName, tableName, singleID))
+		}
+		// If single channel ID given
+	case string:
+		returnTableIDs = append(returnTableIDs, addVideoToDatabaseTable(conn, databaseName, tableName, videos.(string)))
+		// If other type given
+	default:
+		return []int64{-1}
+	}
+	return returnTableIDs
+
+	db := conn.db
+
+	// ret := []bool{}
 	videosDataMaps := []map[string]interface{}{}
 
 	switch videos.(type) {
@@ -220,50 +165,203 @@ func addVideosToDatabaseTable(db *sql.DB, databaseName, tableName string, videos
 	case *youtube.Video:
 		videosDataMaps = append(videosDataMaps, createVideoDataMap(videos.(*youtube.Video)))
 	default:
-		return nil, errors.New("Trying to add non youtube.Video data in method designed to handle youtube.Video objects")
+		return nil
 
 	}
 
 	// Add to database
 	for _, dataMap := range videosDataMaps {
 		// Make sure the channel for the video is stored so that the video can be used to quickly point to its channel data
-		//
-		channelTableId := addChannelToDatabaseTable(db, databaseName, "channels", dataMap["channelId"].(string))
+
+		channelTableId := getDataTableColumnValue(conn, databaseName, "channelData", "channelId", dataMap["channelId"].(string), "tableId")
+		if channelTableId == -1 {
+			channelTableId = addChannelToDatabaseTable(conn, databaseName, "channelData", dataMap["channelId"].(string))
+		}
 
 		// Update the video dataMap with its channel's ID in the channelTable
-		dataMap["channelTableId"] = channelTableId
+		dataMap["tableId"] = channelTableId
 
 		// Add the video data to the table in the database
 		databaseDriver.AddDataToTable(db, databaseName, tableName, dataMap)
 
 	}
 
-	return ret, nil
-}
-
-func addChannelToDatabaseTable(db *sql.DB, databaseName, tableName string, channelID string) int {
-
-	return -1
+	return returnTableIDs
 }
 
 // Returns slice of channelTableID in same order as the data was given
-func addChannelsToDatabaseTable(db *sql.DB, databaseName, tableName string, channelIds interface{}) []int {
-
-	returnTableIDs := []int{}
+func addChannelsToDatabaseTable(conn connections, databaseName, tableName string, channelIds interface{}) []int64 {
+	// db := conn.db
+	returnTableIDs := []int64{}
 	switch channelIds.(type) {
 	// If slice of channel IDs is given
 	case []string:
 		for _, singleID := range channelIds.([]string) {
-			returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(db, databaseName, tableName, singleID))
+			returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(conn, databaseName, tableName, singleID))
 		}
 		// If single channel ID given
 	case string:
-		returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(db, databaseName, tableName, channelIds.(string)))
+		returnTableIDs = append(returnTableIDs, addChannelToDatabaseTable(conn, databaseName, tableName, channelIds.(string)))
 		// If other type given
 	default:
-		return []int{-1}
+		return []int64{-1}
 	}
 	return returnTableIDs
+}
+func addVideoToDatabaseTable(conn connections, databaseName, tableName string, videoID string) int64 {
+	// db := conn.db
+	if !StringDataInDatabase(conn, databaseName, tableName, "videoId", videoID) {
+		obj := getVideoObject(conn, videoID)
+		insertDataMapToTable(conn, databaseName, tableName, createObjectDataMapFactory(obj))
+	}
+
+	return getDataTableColumnValue(conn, databaseName, tableName, "videoId", videoID, "videoTableId")
+}
+
+func addChannelToDatabaseTable(conn connections, databaseName, tableName string, channelID string) int64 {
+	// db := conn.db
+	if !StringDataInDatabase(conn, databaseName, tableName, "channelId", channelID) {
+		obj := getChannelObject(conn, channelID)
+		insertDataMapToTable(conn, databaseName, tableName, createObjectDataMapFactory(obj))
+	}
+
+	return getDataTableColumnValue(conn, databaseName, tableName, "channelId", channelID, "tableId")
+}
+
+func getDataTableColumnValue(conn connections, databaseName, tableName, columnNameKnown, columnValueKnown, columnNameDesired string) int64 {
+
+	db := conn.db
+	var dataValuesMap = make(map[string]string)
+	dataValuesMap[columnNameKnown] = columnValueKnown
+	retrievedData := databaseDriver.GetDataFromTable(db, databaseName, tableName, []string{columnNameDesired}, dataValuesMap)
+
+	if len(retrievedData) > 0 {
+		ret, err := strconv.ParseInt(string(retrievedData[0][columnNameDesired].([]uint8)), 10, 0)
+		if err != nil {
+
+		}
+		return ret
+	} else {
+		return -1
+	}
+}
+
+func StringDataInDatabase(conn connections, databaseName, tableName, columnName, columnValue string) bool {
+
+	db := conn.db
+	var dataValuesMap = make(map[string]string)
+	dataValuesMap[columnName] = columnValue
+	retrievedData := databaseDriver.GetDataFromTable(db, databaseName, tableName, []string{}, dataValuesMap)
+	ret := len(retrievedData) > 0
+	fmt.Printf("Data is in database: %t\n", ret)
+	return ret
+}
+
+func getObjectFromIDFactory(conn connections, id string, objectType interface{}) interface{} {
+	switch objectType.(type) {
+	case *youtube.Channel:
+		// part = "contentDetails, statistics, snippet, topicDetails"
+		// call = conn.service.Channels.List(part)
+		// call.Id(id)
+		return getChannelObject(conn, id)
+	case *youtube.Video:
+		// part = "contentDetails, statistics, snippet, topicDetails"
+		// call = conn.service.Videos.List(part)
+		return getVideoObject(conn, id)
+	default:
+		return nil
+
+	}
+
+	// call.Id(id)
+	// response, err := call.Do()
+
+	// if err != nil {
+	// 	fmt.Println("Error getting channelResponse")
+	// 	fmt.Println(err)
+	// 	os.Exit(1)
+	// }
+
+	// return response.Items[0]
+}
+
+func getVideoObject(conn connections, videoId string) *youtube.Video {
+	params := "contentDetails, statistics, snippet, topicDetails"
+	call := conn.service.Videos.List(params)
+	call.Id(videoId)
+	response, err := call.Do()
+
+	if err != nil {
+		fmt.Println("Error getting videoResponse")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	return response.Items[0]
+}
+
+func getChannelObject(conn connections, channelId string) *youtube.Channel {
+
+	params := "contentDetails, statistics, snippet, topicDetails"
+	call := conn.service.Channels.List(params)
+	call.Id(channelId)
+	response, err := call.Do()
+
+	if err != nil {
+		fmt.Println("Error getting channelResponse")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	return response.Items[0]
+}
+
+// Takes a *youtube.Video object and constructs a map of key:val pairs specifying table_column_name: new_column_data
+func createVideoDataMap(video *youtube.Video) map[string]interface{} {
+	return nil
+}
+
+func createObjectDataMapFactory(object interface{}) map[string]interface{} {
+	switch object.(type) {
+	case *youtube.Channel:
+		return createChannelDataMap(object.(*youtube.Channel))
+	case *youtube.Video:
+		return createVideoDataMap(object.(*youtube.Video))
+	default:
+		return make(map[string]interface{})
+	}
+}
+
+func createChannelDataMap(channel *youtube.Channel) map[string]interface{} {
+	prettyPrinting.PrintJSON(channel)
+	var ret = make(map[string]interface{})
+
+	title := channel.Snippet.Title
+	URL := channel.Snippet.CustomUrl
+	id := channel.Id
+	desc := channel.Snippet.Description
+	subscr := channel.Statistics.SubscriberCount
+	uploadPlaylistId := channel.ContentDetails.RelatedPlaylists.Uploads
+	country := channel.Snippet.Country
+
+	ret["channelName"] = title
+	ret["URL"] = URL
+	ret["channelId"] = id
+	ret["description"] = desc
+	ret["subscriberCount"] = subscr
+	ret["uploadPlaylistID"] = uploadPlaylistId
+	ret["country"] = country
+
+	return ret
+}
+
+func insertDataMapToTable(conn connections, databaseName, tableName string, channelDataMap map[string]interface{}) {
+
+	db := conn.db
+	if len(channelDataMap) > 0 {
+		databaseDriver.AddDataToTable(db, databaseName, tableName, channelDataMap)
+	}
+
 }
 
 func channelsListById(service *youtube.Service, part string, id string) {
@@ -289,31 +387,12 @@ func channelsListById(service *youtube.Service, part string, id string) {
 	// 	response.Items[0].Statistics.ViewCount))
 }
 
-func printJSON(obj interface{}) {
-	retJSONObj, _ := json.MarshalIndent(obj, "", "    ")
-	fmt.Printf("%s\n", retJSONObj)
-}
-
 func Initialize(db *sql.DB) {
-	fmt.Println("in")
-	ctx := context.Background()
 
-	b, err := ioutil.ReadFile("client_secret.json")
-	if err != nil {
-		log.Fatalf("Unable to read client secret file: %v", err)
-	}
+	service := NewYouTubeConnection()
 
-	// If modifying these scopes, delete your previously saved credentials
-	// at ~/.credentials/youtube-go-quickstart.json
-	config, err := google.ConfigFromJSON(b, youtube.YoutubeReadonlyScope)
-	if err != nil {
-		log.Fatalf("Unable to parse client secret file to config: %v", err)
-	}
-	client := getClient(ctx, config)
-	service, err := youtube.New(client)
+	conn := connections{db: db, service: service}
 
-	handleError(err, "Error creating YouTube client")
-	fmt.Println("About to do command")
 	// channelsListByUsername(service, "snippet,contentDetails,contentOwnerDetails,statistics", "GoogleDevelopers")
 	// ifscID := "UC2MGuhIaOP6YLpUx106kTQw"
 	// mrWolfId := "UCs0XZm6REAhwVwmyBPRAKMQ"
@@ -321,16 +400,20 @@ func Initialize(db *sql.DB) {
 	// slackID := "UCyHI7IpiV3ogpKzzm0xxqnA"
 	// channelsListById(service, "brandingSettings,snippet,contentDetails,contentOwnerDetails,statistics", slackID)
 	// slackFavoritesPlaylist := "FLyHI7IpiV3ogpKzzm0xxqnA"
-	slackLikesPlaylist := "LLyHI7IpiV3ogpKzzm0xxqnA"
+	// slackLikesPlaylist := "LLyHI7IpiV3ogpKzzm0xxqnA"
 	// listVideosFromPlaylist(service, "snippet,contentDetails,id,status", slackLikesPlaylist)
 
 	// likedVideosPlaylistItemListResponseObject := callListPlaylistObject(service, "contentDetails", slackLikesPlaylist, 50, "")
 	// vids := getPlaylistVideosIdsSinglePlaylistItemListResponse(likedVideosPlaylistItemListResponseObject)
 	// printJSON(vids)
 
-	allLikedVidsPlaylist := callListPlaylistObjectAccessAllPages(service, "contentDetails", slackLikesPlaylist, 50)
-	vids := getPlaylistVideosIdsMultiplePlaylistItemListResponse(allLikedVidsPlaylist)
-	printJSON(vids)
+	// allLikedVidsPlaylist := callListPlaylistObjectAccessAllPages(service, "contentDetails", slackLikesPlaylist, 50)
+	// vids := getPlaylistVideosIdsMultiplePlaylistItemListResponse(allLikedVidsPlaylist)
+
+	suicideSheepId := "UC5nc_ZtjKW1htCVZVRxlQAQ"
+	cols := addChannelsToDatabaseTable(conn, "youtubedata", "channelData", suicideSheepId)
+
+	prettyPrinting.PrintJSON(cols)
 
 	// Get my liked videos
 	// COMPLETE: Get the videos on my liked playlist - only need 'contentDetails'
