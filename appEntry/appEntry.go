@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"media-tracker/databaseDriver"
+	"media-tracker/youtubecontent"
 	"os"
-	"reflect"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -13,17 +13,17 @@ const db_driver string = "mysql"
 const db_username string = "root"
 const db_password string = "Onyixj@bs$"
 
-func dummy(i interface{}) {
-	fmt.Println(reflect.TypeOf(i))
-}
+// func dummy(i interface{}) {
+// 	fmt.Println(reflect.TypeOf(i))
+// }
 
-func dummy2() interface{} {
-	return "hi"
-}
+// func dummy2() interface{} {
+// 	return "hi"
+// }
 
-func dummy3() interface{} {
-	return true
-}
+// func dummy3() interface{} {
+// 	return true
+// }
 
 func main() {
 	fmt.Println("starting")
@@ -37,8 +37,12 @@ func main() {
 		defer db.Close()
 	}
 
-	dummy(dummy2())
-	dummy(dummy3())
+	DBConn := databaseDriver.NewDataBaseConnectionObject(db)
+
+	youtubecontent.InitializeDemo2(DBConn)
+
+	// dummy(dummy2())
+	// dummy(dummy3())
 
 	// columnNames := []string{"channelID", "channelName", "tableId"}
 	// var dataValues = make(map[string]string)

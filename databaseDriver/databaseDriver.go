@@ -12,7 +12,11 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-// Contains *sql.DB object and implements getDBConnection() to return this object
+type DataBaseConnectionObjectI interface {
+	GetDBConnection() *sql.DB
+}
+
+// Contains *sql.DB object and implements GetDBConnection() to return this object
 type DataBaseConnectionObject struct {
 	DB *sql.DB
 }
@@ -21,7 +25,7 @@ func NewDataBaseConnectionObject(db *sql.DB) DataBaseConnectionObject {
 	return DataBaseConnectionObject{db}
 }
 
-func (dbco *DataBaseConnectionObject) getDBConnection() *sql.DB {
+func (dbco *DataBaseConnectionObject) GetDBConnection() *sql.DB {
 	return dbco.DB
 }
 
@@ -43,7 +47,7 @@ func (dbco *DataBaseConnectionObject) getDBConnection() *sql.DB {
 
 // General method to execute a database query. This is boilerplate code that should work for any query assuming the object has properly implemented the getQueryStatement() method
 func (DBQO *DataBaseTableRequestObject) RunDBQuery() (*sql.Rows, error) {
-	return DBQO.getDBConnection().Query(DBQO.GetRequestStatement())
+	return DBQO.GetDBConnection().Query(DBQO.GetRequestStatement())
 }
 
 // Parses the *sql.Rows response of a query into a slice of maps ( {key:val} pairs)
@@ -91,7 +95,11 @@ type DataBaseTableRequestObjectI interface {
 	RunDBExecution() (sql.Result, error)
 	RunDBQuery() (*sql.Rows, error)
 	ParseQueryRowsResponse(*sql.Rows) []map[string]interface{}
-	GetCellValue(string, map[string]string) interface{}
+	GetColumnCellValues(string, map[string][]string) []interface{}
+	GetColumnsCellValues([]string, map[string][]string) []map[string]interface{}
+	GetValues([]string, map[string][]string) []map[string]interface{}
+	CreateColumn(string, interface{})
+	CreateColumns(map[string]interface{})
 }
 
 type DataBaseTableRequestObject struct {
@@ -104,8 +112,103 @@ func NewDataBaseTableRequestObject(DBCO DataBaseConnectionObject, DBTO DataBaseT
 	return DataBaseTableRequestObject{DBCO, DBTO, requestStatement}
 }
 
-func (DBTRO *DataBaseTableRequestObject) GetCellValue(desCol, constraintMap string) interface{} {
-	// TODO
+func (DBTRO *DataBaseTableRequestObject) CreateColumns(colNameTypeMap map[string]interface{}) {
+
+	for colName, colType := range colNameTypeMap {
+		DBTRO.CreateColumn(colName, colType)
+	}
+
+}
+
+func (DBTRO *DataBaseTableRequestObject) CreateColumn(columnName string, dataType interface{}) {
+	var sql_datatype string
+	switch dataType.(type) {
+	case string:
+		sql_datatype = "VARCHAR(300)"
+	case int:
+		sql_datatype = "INT"
+	case bool:
+		sql_datatype = "BIT"
+	default:
+		sql_datatype = "VARCHAR(300)"
+	}
+
+	prepareStatement := "ALTER TABLE " + DBTRO.GetTableName() + " ADD " + strings.ToUpper(columnName) + " " + sql_datatype + ";"
+	DBTRO.SetRequestStatement(prepareStatement)
+	_, err := DBTRO.RunDBExecution()
+
+	if err != nil {
+		fmt.Println("Error creating column")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+}
+
+func (DBTRO *DataBaseTableRequestObject) GetValues(desCols []string, constraintMap map[string][]string) []map[string]interface{} {
+	var columnsOrAll string
+	if len(desCols) == 0 {
+		columnsOrAll = " * "
+	} else {
+		columnsOrAll = strings.ToUpper(strings.Join(desCols, ", "))
+	}
+
+	prepareStatement := "SELECT " + columnsOrAll + " FROM " + strings.ToUpper(DBTRO.GetTableName())
+
+	if len(constraintMap) > 0 {
+		prepareStatement = prepareStatement + " WHERE "
+
+		counter := 1
+		for key, val := range constraintMap {
+			var valStringCombined []string
+			for _, valString := range val {
+				valStringCombined = append(valStringCombined, "'"+valString+"'")
+			}
+			prepareStatement = prepareStatement + strings.ToUpper(key) + " IN " + "(" + strings.Join(valStringCombined, ",") + ")"
+
+			if counter != len(constraintMap) {
+				prepareStatement = prepareStatement + " OR "
+			}
+			counter++
+
+		}
+	}
+
+	prepareStatement = prepareStatement + ";"
+
+	DBTRO.SetRequestStatement(prepareStatement)
+	rows, err := DBTRO.RunDBQuery()
+
+	if err != nil {
+		fmt.Println("Error getting values")
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	ret := DBTRO.ParseQueryRowsResponse(rows)
+	// prettyPrinting.PrintJSON(ret)
+	return ret
+}
+
+func (DBTRO *DataBaseTableRequestObject) GetColumnCellValues(desCol string, constraintMap map[string][]string) []interface{} {
+	ret := []interface{}{}
+
+	// By construction only the values for a single column are returned
+	// This loop will process the results to be a slice of interfaces{}
+	// Slice is necessary in case multiple rows are returned
+	for _, vals := range DBTRO.GetValues([]string{strings.ToUpper(desCol)}, constraintMap) {
+		fmt.Println("vals:")
+		fmt.Println(vals)
+		fmt.Println("desCol:")
+		fmt.Println(desCol)
+		ret = append(ret, vals[strings.ToUpper(desCol)])
+	}
+
+	return ret
+}
+
+func (DBTRO *DataBaseTableRequestObject) GetColumnsCellValues(desCols []string, constraintMap map[string][]string) []map[string]interface{} {
+	return DBTRO.GetValues(desCols, constraintMap)
 }
 
 func (DBTRO *DataBaseTableRequestObject) Exists(statement string) bool {
@@ -134,7 +237,7 @@ func (DBTRO *DataBaseTableRequestObject) Exists(statement string) bool {
 }
 
 func (DBTRO *DataBaseTableRequestObject) TableExists() bool {
-	existenceCommand := "SELECT * FROM information_schema.tables WHERE table_schema = '" + DBTRO.GetDatabaseName() + "'AND table_name = '" + DBTRO.GetTableName() + "'"
+	existenceCommand := "SELECT * FROM information_schema.tables WHERE table_schema = '" + DBTRO.GetDatabaseName() + "'AND table_name = '" + strings.ToUpper(DBTRO.GetTableName()) + "'" + ";"
 	return DBTRO.Exists(existenceCommand)
 }
 
@@ -143,7 +246,7 @@ func (DBTRO *DataBaseTableRequestObject) CellExists(columnName string, cellValue
 
 	switch cellValue.(type) {
 	case string:
-		cellValueString = "'" + cellValue.(string) + "'"
+		cellValueString = "'" + sanitizeString(cellValue.(string)) + "'"
 	case int:
 		cellValueString = strconv.Itoa(cellValue.(int))
 	case bool:
@@ -156,34 +259,26 @@ func (DBTRO *DataBaseTableRequestObject) CellExists(columnName string, cellValue
 		// Todo
 		return true
 	}
-	existenceCommand := "SELECT " + columnName + " FROM " + DBTRO.GetTableName() + " WHERE " + columnName + " = " + cellValueString + ";"
+	existenceCommand := "SELECT " + strings.ToUpper(columnName) + " FROM " + strings.ToUpper(DBTRO.GetTableName()) + " WHERE " + strings.ToUpper(columnName) + " = " + cellValueString + ";"
 	return DBTRO.Exists(existenceCommand)
 }
 
 func (DBTRO *DataBaseTableRequestObject) ColumnExists(columnName string) bool {
-	existenceCommand := "SELECT " + columnName + " FROM " + DBTRO.GetTableName() + ";"
-	return DBTRO.Exists(existenceCommand)
+	existenceCommand := "SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema = '" + DBTRO.GetDatabaseName() + "'AND table_name = '" + strings.ToUpper(DBTRO.GetTableName()) + "'" + " AND COLUMN_NAME = '" + strings.ToUpper(columnName) + "';"
+
+	// existenceCommand := "SELECT " + strings.ToUpper(columnName) + " FROM " + strings.ToUpper(DBTRO.GetTableName()) + ";"
+	ret := DBTRO.Exists(existenceCommand)
+	fmt.Printf("Column Exists: %v\n", ret)
+
+	return ret
 }
-
-// DatabaseExecution interface{} provides general interface to execute call to database with some execution statement
-// type DatabaseExecution interface {
-
-// }
-
-// DataBaseExecutionObject struct implements DatabaseExecution and embeds dataBaseConnectionObject
-// Embedding allows for access to the database connection object (in mysql this is *sql.DB)
-// Structs embedding 'this' should rewrite their own getExecutionStatement() functions to ensure proper calls
-// to the database
-// type DataBaseExecutionObject struct {
-// 	DataBaseTableRequestObject
-// }
 
 func (DBR *DataBaseTableRequestObject) PrepareRequestStatement() {
 	DBR.SetRequestStatement("")
 }
 
 func (DBR *DataBaseTableRequestObject) RunDBExecution() (sql.Result, error) {
-	return DBR.getDBConnection().Exec(DBR.GetRequestStatement())
+	return DBR.GetDBConnection().Exec(DBR.GetRequestStatement())
 }
 
 func (DBR *DataBaseTableRequestObject) GetRequestStatement() string {
@@ -192,22 +287,10 @@ func (DBR *DataBaseTableRequestObject) GetRequestStatement() string {
 
 func (DBR *DataBaseTableRequestObject) SetRequestStatement(newStatement string) {
 	DBR.RequestStatement = newStatement
+	fmt.Println("New Request Statement:")
+	fmt.Println(newStatement)
+	// fmt.Println()
 }
-
-// type dataRequest struct {
-// 	dataBaseTableObject
-// 	desiredColumns    []string
-// 	columnConstraints map[string]interface{}
-// }
-
-// type dataSelectObjectI interface {
-// 	getDataMap() map[string]interface{}
-// }
-
-// type DataSelectObject struct {
-// 	DataBaseExecutionObject
-// 	dataBaseTableObject
-// }
 
 type DataInsertObjectI interface {
 	CreateDataMap()
@@ -233,12 +316,12 @@ func (DIO *DataInsertObject) CreateDataMap() {
 }
 
 func (DIO *DataInsertObject) PrepareRequestStatement() {
-	db := DIO.getDBConnection()
-	databaseName := DIO.GetDatabaseName()
+	// db := DIO.GetDBConnection()
+	// databaseName := DIO.GetDatabaseName()
 	tableName := DIO.GetTableName()
 	newData := DIO.GetDataMap()
 
-	changeDatabase(db, databaseName)
+	// ChangeDatabase(db, databaseName)
 
 	//insertData
 	var columns string
@@ -253,15 +336,17 @@ func (DIO *DataInsertObject) PrepareRequestStatement() {
 			firstTime = false
 		}
 		if !DIO.ColumnExists(key) {
-			createColumn(db, tableName, key, val)
+			DIO.CreateColumn(key, val)
 		}
 		columns = columns + key
 
 		switch val.(type) {
 		case string:
-			values = values + "'" + val.(string) + "'"
-		case int, int64:
+			values = values + "'" + sanitizeString(val.(string)) + "'"
+		case int:
 			values = values + strconv.Itoa(val.(int))
+		case int64:
+			values = values + strconv.FormatInt(val.(int64), 10)
 		case uint64:
 			values = values + strconv.FormatUint(val.(uint64), 10)
 		case bool:
@@ -282,13 +367,20 @@ func (DIO *DataInsertObject) PrepareRequestStatement() {
 
 }
 
+func sanitizeString(s string) string {
+	rep := strings.NewReplacer("'", "''") //, ";", "__semicolon__", "(", "__leftparenthesis", ")", "rightparenthesis")
+	return rep.Replace(s)
+}
+
 func (DIO *DataInsertObject) GetDataMap() map[string]interface{} {
 	return DIO.dataMap
 }
 
 type DataBaseTableObjectI interface {
 	GetDatabaseName() string
+	SetDatabaseName(string)
 	GetTableName() string
+	SetTableName(string)
 }
 
 type DataBaseTableObject struct {
@@ -304,10 +396,17 @@ func (obj *DataBaseTableObject) GetDatabaseName() string {
 	return obj.DatabaseName
 }
 
+func (obj *DataBaseTableObject) SetDatabaseName(newName string) {
+	obj.DatabaseName = newName
+}
+
 func (obj *DataBaseTableObject) GetTableName() string {
 	return obj.TableName
 }
 
+func (obj *DataBaseTableObject) SetTableName(newName string) {
+	obj.TableName = newName
+}
 func OpenDBConnection(database, username, password string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", username, password, database)) //Onyixj@bs$@/youtubedata")
 	return db, err
@@ -329,7 +428,7 @@ func OpenAndPingDBConnection(database, username, password string) (*sql.DB, erro
 
 }
 
-func changeDatabase(db *sql.DB, databasename string) {
+func ChangeDatabase(db *sql.DB, databasename string) {
 	_, err := db.Exec("USE " + databasename)
 	// fmt.Println(res)
 	if err != nil {
@@ -410,7 +509,7 @@ func cellExists() {
 
 // For now, this assumes that constraints on the retrieved data are strings
 func GetDataFromTable(db *sql.DB, databaseName, tableName string, columnNames []string, dataValues map[string]string) []map[string]interface{} {
-	changeDatabase(db, databaseName)
+	ChangeDatabase(db, databaseName)
 
 	var columnsOrAll string
 	if len(columnNames) == 0 {
@@ -511,7 +610,7 @@ func createColumn(db *sql.DB, tableName, columnName string, dataType interface{}
 }
 
 func AddDataToTable(db *sql.DB, databaseName, tableName string, newData map[string]interface{}) {
-	changeDatabase(db, databaseName)
+	ChangeDatabase(db, databaseName)
 	// fmt.Println(tableName)
 	// prepState := "INSERT INTO " + tableName + "( ? ) VALUES (?);"
 	// fmt.Println(prepState)
@@ -588,7 +687,7 @@ func AddDataToTable(db *sql.DB, databaseName, tableName string, newData map[stri
 
 func MakeYoutubePlaylistTable(db *sql.DB, databaseName, tableName string) bool {
 
-	changeDatabase(db, databaseName)
+	ChangeDatabase(db, databaseName)
 	if !tableExists(db, databaseName, tableName) {
 		_, err := db.Exec("CREATE TABLE " + tableName + " (videoID VARCHAR(500) NOT NULL, videoTableID INT NOT NULL, " + tableName + "TableID INT NOT NULL AUTO_INCREMENT PRIMARY KEY);")
 		if err != nil {
