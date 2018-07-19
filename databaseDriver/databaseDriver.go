@@ -5,9 +5,9 @@ import (
 	"fmt"
 	mysqlerr "mysqlerror"
 	"os"
-	"runtime/debug"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -29,24 +29,13 @@ func (dbco *DataBaseConnectionObject) GetDBConnection() *sql.DB {
 	return dbco.DB
 }
 
-// Interface to establish behavior to make a database query and parse the response
-// type DatabaseQuery interface {
-// 	setQueryStatement(string)
-// 	getQueryStatement() string
-// }
-
-// Struct that implements DatabaseQuery interface and embeds DataBaseConnectionObject to allow for db queries
-// type DataBaseQueryObject struct {
-// 	DataBaseConnectionObject
-// }
-
-// General method to create a query statement. Specific types of objects should implement their own version of this method.
-// func (DBQO *DataBaseTableRequestObject) getQueryStatement() string {
-// 	return ""
-// }
-
 // General method to execute a database query. This is boilerplate code that should work for any query assuming the object has properly implemented the getQueryStatement() method
 func (DBQO *DataBaseTableRequestObject) RunDBQuery() (*sql.Rows, error) {
+	return DBQO.GetDBConnection().Query(DBQO.GetRequestStatement())
+}
+
+func (DBQO *DataBaseTableRequestObject) PrepareAndQuery() (*sql.Rows, error) {
+	DBQO.PrepareRequestStatement()
 	return DBQO.GetDBConnection().Query(DBQO.GetRequestStatement())
 }
 
@@ -100,6 +89,8 @@ type DataBaseTableRequestObjectI interface {
 	GetValues([]string, map[string][]string) []map[string]interface{}
 	CreateColumn(string, interface{})
 	CreateColumns(map[string]interface{})
+	PrepareAndExecute() (sql.Result, error)
+	PrepareAndQuery() (*sql.Rows, error)
 }
 
 type DataBaseTableRequestObject struct {
@@ -281,6 +272,11 @@ func (DBR *DataBaseTableRequestObject) RunDBExecution() (sql.Result, error) {
 	return DBR.GetDBConnection().Exec(DBR.GetRequestStatement())
 }
 
+func (DBR *DataBaseTableRequestObject) PrepareAndExecute() (sql.Result, error) {
+	DBR.PrepareRequestStatement()
+	return DBR.GetDBConnection().Exec(DBR.GetRequestStatement())
+}
+
 func (DBR *DataBaseTableRequestObject) GetRequestStatement() string {
 	return DBR.RequestStatement
 }
@@ -296,6 +292,7 @@ type DataInsertObjectI interface {
 	CreateDataMap()
 	SetDataMap(map[string]interface{})
 	GetDataMap() map[string]interface{}
+	GetID() string
 }
 
 type DataInsertObject struct {
@@ -305,6 +302,15 @@ type DataInsertObject struct {
 
 func NewDataInsertObject(DBTRO DataBaseTableRequestObject, dm map[string]interface{}) DataInsertObject {
 	return DataInsertObject{DBTRO, dm}
+}
+
+func (DIO *DataInsertObject) GetID() string {
+	if ret, ok := DIO.GetDataMap()["id"].(string); ok {
+		return ret
+	} else {
+		return ""
+	}
+
 }
 
 func (DIO *DataInsertObject) SetDataMap(newMap map[string]interface{}) {
@@ -342,6 +348,15 @@ func (DIO *DataInsertObject) PrepareRequestStatement() {
 
 		switch val.(type) {
 		case string:
+			// p := make([]byte, len(val.(string))*4)
+			// r := []rune(sanitizeString(val.(string)))
+			// utf8.EncodeRune(p, )
+			fmt.Println()
+			fmt.Println()
+			fmt.Println()
+			fmt.Println()
+			fmt.Printf("String: %s\n", val.(string))
+			fmt.Printf("Valid string: %v\n", utf8.ValidString(val.(string)))
 			values = values + "'" + sanitizeString(val.(string)) + "'"
 		case int:
 			values = values + strconv.Itoa(val.(int))
@@ -408,7 +423,27 @@ func (obj *DataBaseTableObject) SetTableName(newName string) {
 	obj.TableName = newName
 }
 func OpenDBConnection(database, username, password string) (*sql.DB, error) {
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s", username, password, database)) //Onyixj@bs$@/youtubedata")
+
+	params := make(map[string]string)
+	params["charset"] = "utf8mb4"
+	params["collation"] = "utf8mb4_unicode_ci"
+
+	paramsStrings := []string{}
+
+	for k, v := range params {
+		paramsStrings = append(paramsStrings, k+"="+v)
+	}
+
+	paramsString := strings.Join(paramsStrings, "&")
+	if len(paramsString) > 0 {
+		paramsString = "?" + paramsString
+	} else {
+		paramsString = ""
+	}
+
+	fmt.Printf("ParamsString: %s\n", paramsString)
+
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@/%s%s", username, password, database, paramsString)) //Onyixj@bs$@/youtubedata")
 	return db, err
 }
 
@@ -437,268 +472,22 @@ func ChangeDatabase(db *sql.DB, databasename string) {
 	}
 }
 
-func columnExists(db *sql.DB, tableName string, columnName string) bool {
-	existenceCommand := "SELECT " + columnName + " FROM " + tableName + ";"
-	rows, err := db.Query(existenceCommand)
+//TODO
 
-	if err != nil {
-		if driverErr, ok := err.(*mysql.MySQLError); ok {
-			if driverErr.Number == mysqlerr.ER_BAD_FIELD_ERROR {
+// func MakeYoutubePlaylistTable(db *sql.DB, databaseName, tableName string) bool {
 
-				return false
-			}
-		}
-		fmt.Println("Error checking column existence")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	if rows.Next() {
-		rows.Close()
-		return true
-	}
-	rows.Close()
-	return false
-}
-
-func tableExists(db *sql.DB, databasename string, tableName string) bool {
-	existenceCommand := "SELECT * FROM information_schema.tables WHERE table_schema = '" + databasename + "'AND table_name = '" + tableName + "'"
-	rows, err := db.Query(existenceCommand)
-
-	if err != nil {
-		fmt.Println("Error checking table existence")
-		os.Exit(1)
-	}
-
-	defer rows.Close()
-
-	if rows.Next() {
-		return true
-	}
-
-	return false
-
-}
-
-func cellExists() {
-
-}
-
-// func getDataFromTable(tableName string) {
-// 	var (
-// 		id   int
-// 		name string
-// 	)
-// 	rows, err := db.Query("select id, name from users where id = ?", 1)
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	defer rows.Close()
-// 	for rows.Next() {
-// 		err := rows.Scan(&id, &name)
+// 	ChangeDatabase(db, databaseName)
+// 	if !tableExists(db, databaseName, tableName) {
+// 		_, err := db.Exec("CREATE TABLE " + tableName + " (videoID VARCHAR(500) NOT NULL, videoTableID INT NOT NULL, " + tableName + "TableID INT NOT NULL AUTO_INCREMENT PRIMARY KEY);")
 // 		if err != nil {
-// 			log.Fatal(err)
+// 			fmt.Printf("Error making table", tableName)
+// 			return false
+// 			os.Exit(1)
 // 		}
-// 		log.Println(id, name)
-// 	}
-// 	err = rows.Err()
-// 	if err != nil {
-// 		log.Fatal(err)
+// 		fmt.Printf("Created table")
+// 		return true
+// 	} else {
+// 		fmt.Printf("Table already exists")
+// 		return false
 // 	}
 // }
-
-// For now, this assumes that constraints on the retrieved data are strings
-func GetDataFromTable(db *sql.DB, databaseName, tableName string, columnNames []string, dataValues map[string]string) []map[string]interface{} {
-	ChangeDatabase(db, databaseName)
-
-	var columnsOrAll string
-	if len(columnNames) == 0 {
-		columnsOrAll = " * "
-	} else {
-		columnsOrAll = strings.Join(columnNames, ", ")
-	}
-
-	prepareStatement := "SELECT " + columnsOrAll + " FROM " + tableName
-
-	if len(dataValues) > 0 {
-		prepareStatement = prepareStatement + " WHERE "
-
-		counter := 1
-		for key, val := range dataValues {
-			prepareStatement = prepareStatement + key + " IN " + "('" + val + "')"
-
-			if counter != len(dataValues) {
-				prepareStatement = prepareStatement + " OR "
-			}
-			counter++
-
-		}
-	}
-
-	prepareStatement = prepareStatement + ";"
-
-	rows, err := db.Query(prepareStatement)
-
-	if err != nil {
-		fmt.Println("Error querying table")
-		fmt.Print(err)
-		os.Exit(1)
-	}
-	cols, _ := rows.Columns()
-
-	defer rows.Close()
-
-	var retrievedDataSlice []map[string]interface{}
-
-	// Modified from https://kylewbanks.com/blog/query-result-to-map-in-golang
-	for rows.Next() {
-		// Create a slice of interface{}'s to represent each column,
-		// and a second slice to contain pointers to each item in the columns slice.
-		columns := make([]interface{}, len(cols))
-		columnPointers := make([]interface{}, len(cols))
-		for i, _ := range columns {
-			columnPointers[i] = &columns[i]
-		}
-
-		// Scan the result into the column pointers...
-		if err := rows.Scan(columnPointers...); err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		// Create our map, and retrieve the value for each column from the pointers slice,
-		// storing it in the map with the name of the column as the key.
-		m := make(map[string]interface{})
-		for i, colName := range cols {
-			val := columnPointers[i].(*interface{})
-			m[colName] = *val
-		}
-		retrievedDataSlice = append(retrievedDataSlice, m)
-	}
-	return retrievedDataSlice
-}
-
-func createColumn(db *sql.DB, tableName, columnName string, dataType interface{}) {
-
-	// if err != nil {
-	// 	fmt.Println("Error creating column prepare statement")
-	// 	fmt.Println(err)
-	// 	os.Exit(1)
-	// }
-
-	var sql_datatype string
-	switch dataType.(type) {
-	case string:
-		sql_datatype = "VARCHAR(300)"
-	case int:
-		sql_datatype = "INT"
-	case bool:
-		sql_datatype = "BIT"
-	default:
-		sql_datatype = "VARCHAR(300)"
-	}
-
-	prepareStatement := "ALTER TABLE " + tableName + " ADD " + columnName + " " + sql_datatype + ";"
-	_, err := db.Exec(prepareStatement)
-
-	if err != nil {
-		fmt.Println("Error creating column")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-}
-
-func AddDataToTable(db *sql.DB, databaseName, tableName string, newData map[string]interface{}) {
-	ChangeDatabase(db, databaseName)
-	// fmt.Println(tableName)
-	// prepState := "INSERT INTO " + tableName + "( ? ) VALUES (?);"
-	// fmt.Println(prepState)
-	// preparedInsert, err := db.Prepare(prepState) // ? = placeholder
-	// if err != nil {
-	// 	fmt.Println("Error creating 'prepare' statement in AddDataToTable")
-	// 	fmt.Println(err)
-	// 	debug.PrintStack()
-	// 	os.Exit(1)
-	// }
-	// defer preparedInsert.Close() // Close the statement when we leave main() / the program terminates
-
-	//insertData
-	var columns string
-	var values string
-
-	firstTime := true
-	for key, val := range newData {
-		// fmt.Println(key)
-		// fmt.Println(reflect.TypeOf(val))
-		// fmt.Println()
-
-		// fmt.Println(columns)
-		// fmt.Println(values)
-		// fmt.Println()
-
-		if !firstTime {
-			columns = columns + ","
-			values = values + ","
-		} else {
-			firstTime = false
-		}
-		if !columnExists(db, tableName, key) {
-			createColumn(db, tableName, key, val)
-		}
-		columns = columns + key
-
-		switch val.(type) {
-		case string:
-			values = values + "'" + val.(string) + "'"
-		case int, int64:
-			values = values + strconv.Itoa(val.(int))
-		case uint64:
-			values = values + strconv.FormatUint(val.(uint64), 10)
-		case bool:
-			if val.(bool) {
-				values = values + "1"
-			} else {
-				values = values + "0"
-			}
-		}
-
-	}
-
-	// fmt.Println("columns: ")
-	// prettyPrinting.PrintJSON(columns)
-	// fmt.Println("values: ")
-	// prettyPrinting.PrintJSON(values)
-	prepState := "INSERT INTO " + tableName + "( " + columns + " ) VALUES (" + values + ");"
-
-	// prettyPrinting.PrintJSON(prepState)
-
-	_, err := db.Exec(prepState)
-
-	if err != nil {
-		fmt.Println("Error executing insertion statement in AddDataToTable")
-		fmt.Println(err)
-		debug.PrintStack()
-		os.Exit(1)
-	}
-	// defer preparedInsert.Close() // Close the statement when we leave main() / the program terminates
-
-}
-
-func MakeYoutubePlaylistTable(db *sql.DB, databaseName, tableName string) bool {
-
-	ChangeDatabase(db, databaseName)
-	if !tableExists(db, databaseName, tableName) {
-		_, err := db.Exec("CREATE TABLE " + tableName + " (videoID VARCHAR(500) NOT NULL, videoTableID INT NOT NULL, " + tableName + "TableID INT NOT NULL AUTO_INCREMENT PRIMARY KEY);")
-		if err != nil {
-			fmt.Printf("Error making table", tableName)
-			return false
-			os.Exit(1)
-		}
-		fmt.Printf("Created table")
-		return true
-	} else {
-		fmt.Printf("Table already exists")
-		return false
-	}
-}

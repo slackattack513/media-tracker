@@ -3,10 +3,8 @@ package youtubecontent
 import (
 	"fmt"
 	"media-tracker/databaseDriver"
-	"os"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"google.golang.org/api/youtube/v3"
 )
@@ -29,7 +27,7 @@ type APIToDataBaseControllerObjectI interface {
 }
 
 type GeneralYouTubeAPIObjectI interface {
-	RequestYouTubeAPIObjectFromId(string)
+	RequestYouTubeAPIObjectFromId(string, map[string]interface{})
 	// ScrapeObjectThenAddToDatabase(string)
 }
 
@@ -43,153 +41,14 @@ func (genObj *GeneralAPIToDataBaseControllerObject) RequestYouTubeAPIObjectFromI
 }
 
 func ScrapeObjectThenAddToDatabase(genObj APIToDataBaseControllerObjectI, id string) {
-	genObj.RequestYouTubeAPIObjectFromId(id)
+	genObj.RequestYouTubeAPIObjectFromId(id, map[string]interface{}{})
 	genObj.CreateDataMap()
-	genObj.PrepareRequestStatement()
-	_, err := genObj.RunDBExecution()
+	_, err := genObj.PrepareAndExecute()
 	if err != nil {
 		fmt.Println("Error in adding object to database")
 		fmt.Println(err)
 	}
 }
-
-type channelInsertObject struct {
-	GeneralAPIToDataBaseControllerObject
-	// youtube.Channel
-	youtubeChannel *youtube.Channel
-}
-
-func (cio *channelInsertObject) RequestYouTubeAPIObjectFromId(id string) {
-	params := "contentDetails, statistics, snippet, topicDetails"
-	call := cio.getServiceConnection().Channels.List(params)
-	call.Id(id)
-	response, err := call.Do()
-
-	if err != nil {
-		fmt.Println("Error getting channelResponse")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	cio.youtubeChannel = response.Items[0]
-}
-
-func (cio *channelInsertObject) CreateDataMap() {
-	var ret = make(map[string]interface{})
-
-	title := cio.youtubeChannel.Snippet.Title
-	URL := cio.youtubeChannel.Snippet.CustomUrl
-	id := cio.youtubeChannel.Id
-	desc := cio.youtubeChannel.Snippet.Description
-	subscr := cio.youtubeChannel.Statistics.SubscriberCount
-	uploadPlaylistId := cio.youtubeChannel.ContentDetails.RelatedPlaylists.Uploads
-	country := cio.youtubeChannel.Snippet.Country
-
-	ret["channelName"] = title
-	ret["URL"] = URL
-	ret["channelId"] = id
-	ret["description"] = desc
-	ret["subscriberCount"] = subscr
-	ret["uploadPlaylistID"] = uploadPlaylistId
-	ret["country"] = country
-
-	cio.SetDataMap(ret)
-}
-
-func makeChannelInsertObject(dataConn databaseDriver.DataBaseConnectionObject, serviceConn ServiceConnectionObject, dbName string) *channelInsertObject {
-	DBTO := databaseDriver.NewDataBaseTableObject(dbName, "channelData")
-	return &channelInsertObject{GeneralAPIToDataBaseControllerObject{databaseDriver.NewDataInsertObject(databaseDriver.NewDataBaseTableRequestObject(dataConn, DBTO, ""), make(map[string]interface{})), serviceConn}, nil}
-}
-
-type videoInsertObject struct {
-	GeneralAPIToDataBaseControllerObject
-	// youtube.Channel
-	youtubeVideo *youtube.Video
-}
-
-func (vio *videoInsertObject) RequestYouTubeAPIObjectFromId(id string) {
-	params := "contentDetails, statistics, snippet"
-	call := vio.getServiceConnection().Videos.List(params)
-	call.Id(id)
-	response, err := call.Do()
-
-	if err != nil {
-		fmt.Println("Error getting videoResponse")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-
-	vio.youtubeVideo = response.Items[0]
-}
-
-func (vio *videoInsertObject) PrepareRequestStatement() {
-	newData := vio.GetDataMap()
-
-	if channelId, ok := newData["channelId"]; ok {
-		channelIO := makeChannelInsertObject(vio.DataBaseConnectionObject, vio.ServiceConnectionObject, vio.GetDatabaseName())
-		if !channelIO.CellExists("channelId", channelId) {
-			ScrapeObjectThenAddToDatabase(channelIO, channelId.(string))
-		}
-		channelTableId := channelIO.GetColumnCellValues("TABLEID", map[string][]string{"channelId": []string{channelId.(string)}})
-		res, err := strconv.ParseInt(string(channelTableId[0].([]uint8)), 10, 0)
-
-		if err != nil {
-			fmt.Println("Error getting channel table ID")
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		newData["channelTableId"] = res
-
-	}
-	vio.SetDataMap(newData)
-	vio.GeneralAPIToDataBaseControllerObject.DataInsertObject.PrepareRequestStatement()
-}
-func (vio *videoInsertObject) CreateDataMap() {
-	var ret = make(map[string]interface{})
-
-	id := vio.youtubeVideo.Id
-
-	title := vio.youtubeVideo.Snippet.Title
-	channelId := vio.youtubeVideo.Snippet.ChannelId
-	desc := vio.youtubeVideo.Snippet.Description
-	tags := strings.Join(vio.youtubeVideo.Snippet.Tags, ",")
-
-	duration := ParseAPIDurationResponse(vio.youtubeVideo.ContentDetails.Duration)
-
-	viewCount := vio.youtubeVideo.Statistics.ViewCount
-	likeCount := vio.youtubeVideo.Statistics.LikeCount
-	dislikeCount := vio.youtubeVideo.Statistics.DislikeCount
-
-	ret["videoId"] = id
-
-	ret["videoName"] = title
-	ret["channelId"] = channelId
-	ret["description"] = desc
-	ret["tags"] = tags
-
-	ret["duration"] = duration
-
-	ret["viewCount"] = viewCount
-	ret["likeCount"] = likeCount
-	ret["dislikeCount"] = dislikeCount
-
-	// vio.SetTableName("channelData")
-
-	vio.SetDataMap(ret)
-}
-
-func makeVideoInsertObject(dataConn databaseDriver.DataBaseConnectionObject, serviceConn ServiceConnectionObject, dbName string) *videoInsertObject {
-	DBTO := databaseDriver.NewDataBaseTableObject(dbName, "videoData")
-	return &videoInsertObject{GeneralAPIToDataBaseControllerObject{databaseDriver.NewDataInsertObject(databaseDriver.NewDataBaseTableRequestObject(dataConn, DBTO, ""), make(map[string]interface{})), serviceConn}, nil}
-}
-
-// TODO
-
-// func makePlaylistInsertObject(dataConn databaseDriver.DataBaseConnectionObject, serviceConn ServiceConnectionObject, dbName string, playlistName string) *channelInsertObject {
-// 	DBTO := databaseDriver.NewDataBaseTableObject(dbName, "channelData")
-// 	return &channelInsertObject{databaseDriver.NewDataInsertObject(databaseDriver.NewDataBaseTableRequestObject(dataConn, DBTO, ""), make(map[string]interface{})), serviceConn, nil}
-//
 
 func addObjectToDatabaseTableFromYouTubeID(db databaseDriver.DataBaseConnectionObject, conn ServiceConnectionObject, dbName, objectID string, objectType interface{}) int64 {
 	var obj APIToDataBaseControllerObjectI
@@ -215,7 +74,7 @@ func addObjectToDatabaseTableFromYouTubeID(db databaseDriver.DataBaseConnectionO
 
 	if !obj.CellExists(columnName, objectID) {
 		fmt.Println("Cell doesnt exist, about to connect to API")
-		obj.RequestYouTubeAPIObjectFromId(objectID)
+		obj.RequestYouTubeAPIObjectFromId(objectID, map[string]interface{}{})
 		obj.CreateDataMap()
 		obj.PrepareRequestStatement()
 		_, err := obj.RunDBExecution()
